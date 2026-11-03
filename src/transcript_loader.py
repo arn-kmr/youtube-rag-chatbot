@@ -71,33 +71,50 @@ def _chunk_snippets(snippets: list, video_id: str, chunk_size: int = 800) -> Lis
 
 def _transcribe_audio_with_gemini(video_id: str) -> List[dict]:
     """
-    Fallback: Downloads audio with yt-dlp and transcribes using Gemini's multimodal audio API.
-    Used when captions are completely disabled on YouTube.
+    Fallback: Attempts to download audio with yt-dlp and transcribe with Gemini.
+    Gracefully catches YouTube's bot-detection (HTTP 403 / SABR).
     """
     import yt_dlp
     from google import genai
 
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        raise ValueError("Transcripts are disabled for this video, and GOOGLE_API_KEY is required for audio transcription fallback.")
+        raise ValueError(
+            "Transcripts are disabled for this video, and GOOGLE_API_KEY is required for audio transcription fallback."
+        )
 
     client = genai.Client(api_key=api_key)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         audio_template = os.path.join(tmpdir, "audio.%(ext)s")
         ydl_opts = {
-            "format": "ba[ext=m4a]/ba",
+            "format": "ba[ext=m4a]/ba/b",
             "outtmpl": audio_template,
             "quiet": True,
             "no_warnings": True,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android", "web"]
+                }
+            }
         }
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+        except Exception as yt_err:
+            err_str = str(yt_err)
+            if "403" in err_str or "Forbidden" in err_str or "Requested format is not available" in err_str:
+                raise ValueError(
+                    "This YouTube video has captions/transcripts disabled by the creator, "
+                    "and YouTube's bot protection (HTTP 403 Forbidden) prevented downloading the audio stream. "
+                    "Please test with a video that has subtitles or closed captions enabled (e.g. podcasts, tutorials, talks, or interviews)."
+                )
+            raise ValueError(f"Audio fallback failed: {err_str}")
 
         downloaded_files = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if not f.endswith(".part")]
         if not downloaded_files:
-            raise ValueError("Failed to download audio track for transcription fallback.")
+            raise ValueError("Failed to retrieve audio stream for transcription fallback.")
 
         audio_file_path = downloaded_files[0]
         uploaded_file = client.files.upload(file=audio_file_path)
@@ -112,7 +129,6 @@ def _transcribe_audio_with_gemini(video_id: str) -> List[dict]:
             contents=[uploaded_file, prompt],
         )
 
-        # Parse output into snippet-like dicts
         snippets = []
         lines = response.text.split("\n")
         ts_pattern = re.compile(r"\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(.*)")
@@ -136,7 +152,7 @@ def fetch_transcript_documents(
     Fetches the transcript for a YouTube video and chunks it with timestamps.
     Hierarchy:
     1. Direct transcript fetch via YouTube Transcript API.
-    2. Auto-generated / translated transcript to English.
+    2. Auto-generated / translated transcript to English or native language.
     3. Multi-modal audio fallback using yt-dlp + Gemini if captions are disabled.
     """
     api = YouTubeTranscriptApi()
@@ -146,7 +162,7 @@ def fetch_transcript_documents(
         raw_snippets = api.fetch(video_id)
         if raw_snippets:
             return _chunk_snippets(raw_snippets, video_id, chunk_size)
-    except (TranscriptsDisabled, NoTranscriptFound, Exception):
+    except Exception:
         pass
 
     # 2. Try multi-language / auto-generated / translation fallback
@@ -154,17 +170,25 @@ def fetch_transcript_documents(
         transcript_list = api.list(video_id)
         found_transcript = None
 
-        # Look for English first
+        # Look for English (manual or auto)
         for t in transcript_list:
             if t.language_code.startswith("en"):
                 found_transcript = t
                 break
 
-        # If not English, find any transcript and auto-translate
+        # If no English transcript, try auto-translating the first available one to English
         if not found_transcript:
-            first_t = next(iter(transcript_list), None)
-            if first_t:
-                found_transcript = first_t.translate("en") if first_t.is_translatable else first_t
+            for t in transcript_list:
+                if t.is_translatable:
+                    try:
+                        found_transcript = t.translate("en")
+                        break
+                    except Exception:
+                        continue
+
+        # If translation failed, use first available native transcript directly
+        if not found_transcript:
+            found_transcript = next(iter(transcript_list), None)
 
         if found_transcript:
             raw_snippets = found_transcript.fetch()
@@ -178,9 +202,13 @@ def fetch_transcript_documents(
         raw_snippets = _transcribe_audio_with_gemini(video_id)
         if raw_snippets:
             return _chunk_snippets(raw_snippets, video_id, chunk_size)
+    except ValueError:
+        raise
     except Exception as e:
         raise ValueError(
-            f"Unable to extract captions or audio for this video. Details: {str(e)}"
+            f"This video does not have captions or transcripts available. Details: {str(e)}"
         )
 
-    raise ValueError("The transcript for this video could not be retrieved.")
+    raise ValueError(
+        "No captions or subtitles were found for this video. Please select a video with captions enabled."
+    )
