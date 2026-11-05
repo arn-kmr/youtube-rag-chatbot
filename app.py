@@ -1,42 +1,77 @@
+import os
 import streamlit as st
 from dotenv import load_dotenv, find_dotenv
 
-from src.utils import extract_video_id, linkify_timestamps
-from src.transcript_loader import fetch_transcript_documents
+from src.utils import extract_video_id, linkify_timestamps, fetch_video_metadata, parse_time_to_seconds
+from src.transcript_loader import fetch_transcript_documents, create_documents_from_text
 from src.vector_store import get_embedding_model, get_or_create_vector_store
 from src.rag_pipeline import build_rag_pipeline
 
 # Load environment variables
 load_dotenv(find_dotenv())
 
+# Handle Streamlit Cloud secrets fallback
+if not os.getenv("GOOGLE_API_KEY") and hasattr(st, "secrets") and "GOOGLE_API_KEY" in st.secrets:
+    os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+
 # Configure Streamlit page
 st.set_page_config(
-    page_title="YouTube RAG Chatbot",
+    page_title="YouTube RAG AI Chatbot",
     page_icon="🎥",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Custom styling
+# Custom modern CSS styling
 st.markdown(
     """
     <style>
     .main-title {
-        font-size: 2.2rem;
+        font-size: 2.1rem;
         font-weight: 700;
-        margin-bottom: 0.2rem;
+        margin-bottom: 0.1rem;
+        letter-spacing: -0.02em;
     }
     .sub-title {
         color: #6c757d;
-        font-size: 1.05rem;
-        margin-bottom: 1.5rem;
+        font-size: 1.0rem;
+        margin-bottom: 1.2rem;
     }
-    .badge-video {
-        background-color: #f0f2f6;
-        padding: 4px 10px;
-        border-radius: 6px;
+    .video-info-card {
+        background-color: #f8f9fa;
+        border: 1px solid #e9ecef;
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin-bottom: 15px;
+    }
+    .video-title {
+        font-size: 1.05rem;
+        font-weight: 600;
+        color: #212529;
+        margin-bottom: 4px;
+        line-height: 1.3;
+    }
+    .video-meta {
         font-size: 0.85rem;
-        font-family: monospace;
+        color: #6c757d;
+    }
+    .badge-chip {
+        display: inline-block;
+        background-color: #e3f2fd;
+        color: #0d47a1;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.78rem;
+        font-weight: 600;
+        margin-right: 6px;
+    }
+    .source-box {
+        background-color: #f8f9fa;
+        border-left: 3px solid #1976d2;
+        padding: 8px 12px;
+        margin: 6px 0;
+        border-radius: 0 6px 6px 0;
+        font-size: 0.9rem;
     }
     </style>
     """,
@@ -57,10 +92,16 @@ if "current_video_id" not in st.session_state:
     st.session_state.current_video_id = None
 if "current_video_url" not in st.session_state:
     st.session_state.current_video_url = None
+if "video_meta" not in st.session_state:
+    st.session_state.video_meta = {}
 if "vector_store" not in st.session_state:
     st.session_state.vector_store = None
 if "quick_prompt" not in st.session_state:
     st.session_state.quick_prompt = None
+if "player_start_time" not in st.session_state:
+    st.session_state.player_start_time = 0
+if "chunk_count" not in st.session_state:
+    st.session_state.chunk_count = 0
 
 embeddings = load_cached_embeddings()
 
@@ -86,40 +127,89 @@ with st.sidebar:
             st.session_state.messages = []
             st.rerun()
 
+    with st.expander("📝 Custom / Pasted Transcript"):
+        st.caption("Paste transcript text or notes directly if video has no captions:")
+        manual_text = st.text_area("Paste Transcript Text:", height=120, placeholder="[00:15] Welcome everyone...\n[01:30] Today we discuss...")
+        manual_id = st.text_input("Custom Video ID / Label:", value="custom_video")
+        manual_submit = st.button("📥 Index Custom Transcript", use_container_width=True)
+
     st.divider()
     st.subheader("2. Model & Search Settings")
     selected_model = st.selectbox(
         "Gemini Model",
         options=["gemini-3.5-flash", "gemini-3.8-flash", "gemini-flash-latest"],
         index=0,
+        help="Fast & high-capacity Gemini models for grounded QA.",
     )
     use_hybrid = st.toggle(
         "Hybrid Search (Dense + BM25)",
         value=True,
-        help="Combines semantic vector search with keyword search (BM25) for superior accuracy on names and technical terms.",
+        help="Combines semantic vector search with keyword search (BM25) for superior accuracy on names, acronyms, and technical terms.",
     )
     top_k = st.slider("Context Chunks (k)", min_value=2, max_value=8, value=4)
     chunk_size = st.slider("Chunk Size (characters)", min_value=500, max_value=1500, value=900, step=100)
 
     st.divider()
-    if st.session_state.current_video_id:
-        st.success(f"Active Video: `{st.session_state.current_video_id}`")
-        badge_text = "Dense + BM25 Hybrid" if use_hybrid else "Dense FAISS"
-        st.caption(f"Retriever: **{badge_text}** (FAISS cached)")
-    else:
-        st.info("Enter a YouTube URL and click **Load Video** to begin.")
+    # API Key Configuration
+    api_key_env = os.getenv("GOOGLE_API_KEY")
+    if not api_key_env:
+        user_key = st.text_input("Google AI API Key:", type="password", placeholder="AIzaSy...")
+        if user_key:
+            os.environ["GOOGLE_API_KEY"] = user_key
+            st.success("API Key updated for this session!")
+
+    # Chat Export Button in Sidebar
+    if st.session_state.messages:
+        chat_export_text = "# YouTube RAG Chat Transcript\n\n"
+        if st.session_state.video_meta:
+            chat_export_text += f"**Video:** {st.session_state.video_meta.get('title', '')}\n"
+            chat_export_text += f"**URL:** {st.session_state.current_video_url}\n\n---\n\n"
+        for m in st.session_state.messages:
+            role_name = "User" if m["role"] == "user" else "Assistant"
+            chat_export_text += f"### {role_name}:\n{m['content']}\n\n"
+
+        st.download_button(
+            label="💾 Download Chat (Markdown)",
+            data=chat_export_text,
+            file_name=f"chat_{st.session_state.current_video_id or 'notes'}.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
 
 
 # ----------------- VIDEO PROCESSING -----------------
-if process_clicked and input_url:
+# 1. Process custom manual transcript if submitted
+if manual_submit and manual_text:
+    try:
+        with st.spinner("Processing custom transcript..."):
+            docs = create_documents_from_text(manual_text, video_id=manual_id, chunk_size=chunk_size)
+            vstore = get_or_create_vector_store(manual_id, docs, embeddings)
+            st.session_state.messages = []
+            st.session_state.current_video_id = manual_id
+            st.session_state.current_video_url = f"https://www.youtube.com/watch?v={manual_id}"
+            st.session_state.vector_store = vstore
+            st.session_state.chunk_count = len(docs)
+            st.session_state.video_meta = {
+                "title": f"Custom Transcript ({manual_id})",
+                "author": "User Ingested",
+                "thumbnail_url": "",
+            }
+            st.toast("Custom transcript indexed successfully!", icon="✅")
+            st.rerun()
+    except Exception as e:
+        st.error(f"Error indexing custom transcript: {e}")
+
+# 2. Process YouTube URL
+elif process_clicked and input_url:
     video_id = extract_video_id(input_url)
     if not video_id:
         st.error("Invalid YouTube URL or ID format. Please check and try again.")
     else:
         try:
-            with st.spinner("Fetching transcript (or audio fallback) and building index..."):
+            with st.spinner("Fetching transcript (API / yt-dlp) and building index..."):
                 docs = fetch_transcript_documents(video_id, chunk_size=chunk_size)
                 vstore = get_or_create_vector_store(video_id, docs, embeddings)
+                metadata = fetch_video_metadata(video_id)
 
                 # Reset chat if changing videos
                 if st.session_state.current_video_id != video_id:
@@ -128,6 +218,9 @@ if process_clicked and input_url:
                 st.session_state.current_video_id = video_id
                 st.session_state.current_video_url = f"https://www.youtube.com/watch?v={video_id}"
                 st.session_state.vector_store = vstore
+                st.session_state.video_meta = metadata
+                st.session_state.chunk_count = len(docs)
+                st.session_state.player_start_time = 0
                 st.toast("Video transcript indexed successfully!", icon="✅")
                 st.rerun()
         except Exception as e:
@@ -137,29 +230,55 @@ if process_clicked and input_url:
 # ----------------- MAIN INTERFACE -----------------
 st.markdown('<div class="main-title">YouTube Transcript AI Assistant</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="sub-title">Ask questions about any video. Answers are grounded in the transcript with interactive timestamp jump links.</div>',
+    '<div class="sub-title">Chat with any YouTube video with timestamped citations and interactive seek control.</div>',
     unsafe_allow_html=True,
 )
 
 if not st.session_state.vector_store or not st.session_state.current_video_id:
-    st.info("👈 Paste a YouTube video URL in the sidebar and click **Load Video** to start chatting.")
+    st.info("👈 Enter a YouTube URL in the sidebar and click **🚀 Load Video** to begin.")
     st.stop()
 
 # Layout: Split into Video Player (left) and Chat Area (right)
-col_player, col_chat = st.columns([1, 1.3], gap="large")
+col_player, col_chat = st.columns([1, 1.25], gap="large")
 
 with col_player:
-    st.subheader("📺 Video Player")
-    st.video(st.session_state.current_video_url)
+    # Rich Video Info Card
+    meta = st.session_state.video_meta or {}
+    vtitle = meta.get("title", f"Video ({st.session_state.current_video_id})")
+    vauthor = meta.get("author", "YouTube Creator")
 
+    st.markdown(
+        f"""
+        <div class="video-info-card">
+            <div class="video-title">🎬 {vtitle}</div>
+            <div class="video-meta">
+                <span class="badge-chip">👤 {vauthor}</span>
+                <span class="badge-chip">📑 {st.session_state.chunk_count} Segments</span>
+                <span class="badge-chip">🔍 {'Dense + BM25 Hybrid' if use_hybrid else 'FAISS Dense'}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Embedded Player with dynamic seek
+    st.video(st.session_state.current_video_url, start_time=st.session_state.player_start_time)
+
+    # Quick Prompts
     st.markdown("**⚡ Quick Prompts**")
-    q1, q2, q3 = st.columns(3)
-    if q1.button("📋 Summarize", use_container_width=True):
-        st.session_state.quick_prompt = "Can you provide a comprehensive summary of the main points discussed in this video?"
-    if q2.button("💡 Key Takeaways", use_container_width=True):
-        st.session_state.quick_prompt = "What are the key takeaways and highlights from this video?"
-    if q3.button("❓ Topics Outline", use_container_width=True):
-        st.session_state.quick_prompt = "What are the major topics covered in this video along with their approximate timestamps?"
+    qp1, qp2 = st.columns(2)
+    with qp1:
+        if st.button("📋 Full Summary", use_container_width=True):
+            st.session_state.quick_prompt = "Can you provide a comprehensive summary of the main points discussed in this video?"
+        if qp2.button("💡 Key Takeaways", use_container_width=True):
+            st.session_state.quick_prompt = "What are the most important takeaways, lessons, and insights from this video?"
+    qp3, qp4 = st.columns(2)
+    with qp3:
+        if st.button("⏱️ Chapters Outline", use_container_width=True):
+            st.session_state.quick_prompt = "Outline the major topics covered in this video along with approximate timestamps for each chapter."
+    with qp4:
+        if st.button("❓ Top Q&A", use_container_width=True):
+            st.session_state.quick_prompt = "What are the top 5 questions answered in this video and their concise answers?"
 
 
 with col_chat:
@@ -168,7 +287,7 @@ with col_chat:
     # Display existing chat messages
     chat_container = st.container()
     with chat_container:
-        for msg in st.session_state.messages:
+        for msg_idx, msg in enumerate(st.session_state.messages):
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
                 if "sources" in msg and msg["sources"]:
@@ -178,6 +297,13 @@ with col_chat:
                             linkified_content = linkify_timestamps(doc.get("content", ""), st.session_state.current_video_id)
                             st.markdown(f"**Source {i} (Timestamp: {ts})**")
                             st.markdown(linkified_content)
+
+                            # Quick jump in player button
+                            if ts != "N/A":
+                                secs = parse_time_to_seconds(ts)
+                                if st.button(f"▶️ Seek Player to {ts}", key=f"seek_{msg_idx}_{i}"):
+                                    st.session_state.player_start_time = secs
+                                    st.rerun()
 
     # Input prompt handling (either from chat_input or quick buttons)
     user_input = st.chat_input("Ask a question about this video...")
@@ -201,7 +327,7 @@ with col_chat:
                     use_hybrid=use_hybrid,
                 )
 
-                # Prior chat history (excluding the current user question)
+                # Prior chat history (excluding current user turn)
                 history = st.session_state.messages[:-1]
                 stream_generator, retrieved_docs = pipeline(
                     question=user_input,
@@ -238,7 +364,7 @@ with col_chat:
                     "sources": source_data,
                 })
 
-                # Rerun if timestamps were converted into links so UI reflects clickable formatting
+                # Rerun if timestamps converted into markdown links so UI reflects formatting
                 if linkified_response != raw_response:
                     st.rerun()
 

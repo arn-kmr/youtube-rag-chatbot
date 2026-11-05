@@ -1,4 +1,5 @@
-from typing import List, Generator
+import os
+from typing import List, Generator, Optional
 from dotenv import load_dotenv, find_dotenv
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
@@ -52,6 +53,7 @@ def build_rag_pipeline(
     model_name: str = "gemini-3.5-flash",
     top_k: int = 4,
     use_hybrid: bool = True,
+    api_key: Optional[str] = None,
 ):
     """
     Constructs a RAG pipeline with Hybrid Search (FAISS + BM25),
@@ -63,9 +65,19 @@ def build_rag_pipeline(
         use_hybrid=use_hybrid,
     )
 
+    resolved_api_key = api_key or os.getenv("GOOGLE_API_KEY")
+    if not resolved_api_key:
+        try:
+            import streamlit as st
+            if hasattr(st, "secrets") and "GOOGLE_API_KEY" in st.secrets:
+                resolved_api_key = st.secrets["GOOGLE_API_KEY"]
+        except Exception:
+            pass
+
     llm = ChatGoogleGenerativeAI(
         model=model_name,
         temperature=0.2,
+        google_api_key=resolved_api_key,
     )
 
     prompt = ChatPromptTemplate.from_messages(
@@ -99,6 +111,7 @@ def build_rag_pipeline(
                 "question": question,
             }
         )
+
         return stream, retrieved_docs
 
     return query_stream

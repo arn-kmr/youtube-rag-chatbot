@@ -1,7 +1,10 @@
 import re
+import json
+import urllib.request
+from typing import Optional, Dict
 
 
-def extract_video_id(url_or_id: str) -> str | None:
+def extract_video_id(url_or_id: str) -> Optional[str]:
     """
     Extracts the 11-character YouTube video ID from various URL formats or raw ID.
     Supports:
@@ -28,6 +31,36 @@ def extract_video_id(url_or_id: str) -> str | None:
         if match:
             return match.group(1)
     return None
+
+
+def fetch_video_metadata(video_id: str) -> Dict[str, str]:
+    """
+    Fetches video metadata (title, author/channel, thumbnail) using
+    YouTube's public oEmbed endpoint. Requires no API keys.
+    """
+    fallback = {
+        "title": f"YouTube Video ({video_id})",
+        "author": "YouTube Creator",
+        "thumbnail_url": f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg",
+    }
+    if not video_id:
+        return fallback
+
+    try:
+        url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return {
+                "title": data.get("title", fallback["title"]),
+                "author": data.get("author_name", fallback["author"]),
+                "thumbnail_url": data.get("thumbnail_url", fallback["thumbnail_url"]),
+            }
+    except Exception:
+        return fallback
 
 
 def format_timestamp(seconds: float) -> str:

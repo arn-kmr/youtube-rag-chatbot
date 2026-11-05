@@ -6,8 +6,9 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.retrievers import BM25Retriever
 from langchain_classic.retrievers import EnsembleRetriever
 
-
-CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".faiss_cache")
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+CACHE_DIR = os.path.join(BASE_DIR, ".faiss_cache")
+SAMPLE_CACHE_DIR = os.path.join(BASE_DIR, "sample_data")
 
 
 def get_embedding_model() -> HuggingFaceEmbeddings:
@@ -29,10 +30,20 @@ def get_or_create_vector_store(
     """
     os.makedirs(CACHE_DIR, exist_ok=True)
     video_cache_path = os.path.join(CACHE_DIR, video_id)
+    bundled_cache_path = os.path.join(SAMPLE_CACHE_DIR, f"cache_{video_id}")
 
+    # 1. Check local runtime cache
     if os.path.exists(os.path.join(video_cache_path, "index.faiss")):
         return FAISS.load_local(
             video_cache_path,
+            embeddings,
+            allow_dangerous_deserialization=True,
+        )
+
+    # 2. Check bundled sample cache (for cloud deployment demo videos)
+    if os.path.exists(os.path.join(bundled_cache_path, "index.faiss")):
+        return FAISS.load_local(
+            bundled_cache_path,
             embeddings,
             allow_dangerous_deserialization=True,
         )
@@ -41,7 +52,10 @@ def get_or_create_vector_store(
         raise ValueError("Cannot build vector store without documents.")
 
     vector_store = FAISS.from_documents(documents, embeddings)
-    vector_store.save_local(video_cache_path)
+    try:
+        vector_store.save_local(video_cache_path)
+    except Exception:
+        pass  # ignore write errors on restricted cloud filesystems
     return vector_store
 
 
