@@ -12,7 +12,10 @@ from youtube_transcript_api import (
     VideoUnavailable,
 )
 from langchain_core.documents import Document
-from src.utils import format_timestamp, parse_time_to_seconds
+try:
+    from src.utils import format_timestamp, parse_time_to_seconds
+except ImportError:
+    from utils import format_timestamp, parse_time_to_seconds
 
 load_dotenv(find_dotenv())
 

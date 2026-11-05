@@ -1,11 +1,28 @@
+import sys
 import os
+from pathlib import Path
+
+# Add project root and src to sys.path for Streamlit Cloud compatibility
+ROOT_DIR = Path(__file__).resolve().parent
+SRC_DIR = ROOT_DIR / "src"
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 import streamlit as st
 from dotenv import load_dotenv, find_dotenv
 
-from src.utils import extract_video_id, linkify_timestamps, fetch_video_metadata, parse_time_to_seconds
-from src.transcript_loader import fetch_transcript_documents, create_documents_from_text
-from src.vector_store import get_embedding_model, get_or_create_vector_store
-from src.rag_pipeline import build_rag_pipeline
+try:
+    from src.utils import extract_video_id, linkify_timestamps, fetch_video_metadata, parse_time_to_seconds
+    from src.transcript_loader import fetch_transcript_documents, create_documents_from_text
+    from src.vector_store import get_embedding_model, get_or_create_vector_store
+    from src.rag_pipeline import build_rag_pipeline
+except ImportError:
+    from utils import extract_video_id, linkify_timestamps, fetch_video_metadata, parse_time_to_seconds
+    from transcript_loader import fetch_transcript_documents, create_documents_from_text
+    from vector_store import get_embedding_model, get_or_create_vector_store
+    from rag_pipeline import build_rag_pipeline
 
 # Load environment variables
 load_dotenv(find_dotenv())

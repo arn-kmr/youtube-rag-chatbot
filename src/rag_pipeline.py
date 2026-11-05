@@ -8,8 +8,12 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
 
-from src.vector_store import build_retriever
-from src.utils import linkify_timestamps
+try:
+    from src.vector_store import build_retriever
+    from src.utils import linkify_timestamps
+except ImportError:
+    from vector_store import build_retriever
+    from utils import linkify_timestamps
 
 load_dotenv(find_dotenv())
 
