@@ -54,6 +54,14 @@ st.markdown(
         font-size: 1.0rem;
         margin-bottom: 1.2rem;
     }
+    /* Sticky Left Column so Video Player stays pinned while scrolling */
+    [data-testid="stHorizontalBlock"] > [data-testid="column"]:first-child {
+        position: sticky !important;
+        top: 1.5rem !important;
+        align-self: flex-start !important;
+        max-height: calc(100vh - 2.5rem);
+        overflow-y: auto;
+    }
     .video-info-card {
         background-color: #f8f9fa;
         border: 1px solid #e9ecef;
@@ -301,8 +309,8 @@ with col_player:
 with col_chat:
     st.subheader("💬 Chat with Video")
 
-    # Display existing chat messages
-    chat_container = st.container()
+    # Display existing chat messages in a fixed-height scrollable container
+    chat_container = st.container(height=580)
     with chat_container:
         for msg_idx, msg in enumerate(st.session_state.messages):
             with st.chat_message(msg["role"]):
@@ -322,70 +330,71 @@ with col_chat:
                                     st.session_state.player_start_time = secs
                                     st.rerun()
 
-    # Input prompt handling (either from chat_input or quick buttons)
+    # Input prompt handling docked right below the chat container
     user_input = st.chat_input("Ask a question about this video...")
     if st.session_state.quick_prompt:
         user_input = st.session_state.quick_prompt
         st.session_state.quick_prompt = None
 
     if user_input:
-        # Display user message
+        # Display user and streaming assistant message directly inside the scrollable container
         st.session_state.messages.append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.markdown(user_input)
+        with chat_container:
+            with st.chat_message("user"):
+                st.markdown(user_input)
 
-        # Assistant response
-        with st.chat_message("assistant"):
-            try:
-                pipeline = build_rag_pipeline(
-                    vector_store=st.session_state.vector_store,
-                    model_name=selected_model,
-                    top_k=top_k,
-                    use_hybrid=use_hybrid,
-                )
+            # Assistant response
+            with st.chat_message("assistant"):
+                try:
+                    pipeline = build_rag_pipeline(
+                        vector_store=st.session_state.vector_store,
+                        model_name=selected_model,
+                        top_k=top_k,
+                        use_hybrid=use_hybrid,
+                    )
 
-                # Prior chat history (excluding current user turn)
-                history = st.session_state.messages[:-1]
-                stream_generator, retrieved_docs = pipeline(
-                    question=user_input,
-                    chat_history=history,
-                    video_id=st.session_state.current_video_id,
-                )
+                    # Prior chat history (excluding current user turn)
+                    history = st.session_state.messages[:-1]
+                    stream_generator, retrieved_docs = pipeline(
+                        question=user_input,
+                        chat_history=history,
+                        video_id=st.session_state.current_video_id,
+                    )
 
-                # Stream response
-                raw_response = st.write_stream(stream_generator)
+                    # Stream response
+                    raw_response = st.write_stream(stream_generator)
 
-                # Turn timestamps like [04:25] into clickable YouTube jump links
-                linkified_response = linkify_timestamps(raw_response, st.session_state.current_video_id)
+                    # Turn timestamps like [04:25] into clickable YouTube jump links
+                    linkified_response = linkify_timestamps(raw_response, st.session_state.current_video_id)
 
-                # Format source documents
-                source_data = [
-                    {
-                        "timestamp": d.metadata.get("timestamp", "N/A"),
-                        "content": d.page_content,
-                    }
-                    for d in retrieved_docs
-                ]
+                    # Format source documents
+                    source_data = [
+                        {
+                            "timestamp": d.metadata.get("timestamp", "N/A"),
+                            "content": d.page_content,
+                        }
+                        for d in retrieved_docs
+                    ]
 
-                # Show sources expander
-                if source_data:
-                    with st.expander("🔍 View Context Sources & Clickable Timestamps"):
-                        for i, s in enumerate(source_data, 1):
-                            st.markdown(f"**Source {i} (Timestamp: {s['timestamp']})**")
-                            st.markdown(linkify_timestamps(s["content"], st.session_state.current_video_id))
+                    # Show sources expander
+                    if source_data:
+                        with st.expander("🔍 View Context Sources & Clickable Timestamps"):
+                            for i, s in enumerate(source_data, 1):
+                                st.markdown(f"**Source {i} (Timestamp: {s['timestamp']})**")
+                                st.markdown(linkify_timestamps(s["content"], st.session_state.current_video_id))
 
-                # Save assistant response
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": linkified_response,
-                    "sources": source_data,
-                })
+                    # Save assistant response
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": linkified_response,
+                        "sources": source_data,
+                    })
 
-                # Rerun if timestamps converted into markdown links so UI reflects formatting
-                if linkified_response != raw_response:
-                    st.rerun()
+                    # Rerun if timestamps converted into markdown links so UI reflects formatting
+                    if linkified_response != raw_response:
+                        st.rerun()
 
-            except Exception as err:
-                error_msg = f"An error occurred: {str(err)}"
-                st.error(error_msg)
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                except Exception as err:
+                    error_msg = f"An error occurred: {str(err)}"
+                    st.error(error_msg)
+                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
