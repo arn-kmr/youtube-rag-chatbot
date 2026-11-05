@@ -1,44 +1,63 @@
 # 🎥 YouTube RAG Chatbot
 
-An intelligent, interactive Retrieval-Augmented Generation (RAG) assistant that allows users to chat with any YouTube video. The assistant grounds answers strictly in the transcript, provides **clickable timestamp jump links** (`[04:12]`), utilizes **Hybrid Retrieval (Dense FAISS + BM25)**, and maintains conversational memory.
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://youtube-rag-chatbot123.streamlit.app/)
+[![GitHub Repo](https://img.shields.io/badge/GitHub-arn--kmr%2Fyoutube--rag--chatbot-blue?logo=github)](https://github.com/arn-kmr/youtube-rag-chatbot)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+
+> 🚀 **Live Demo:** Try the application right now in your browser:  
+> **👉 [https://youtube-rag-chatbot123.streamlit.app/](https://youtube-rag-chatbot123.streamlit.app/)**
+
+---
+
+An intelligent, interactive Retrieval-Augmented Generation (RAG) assistant that allows users to chat with any YouTube video. The assistant grounds answers strictly in the transcript, provides **clickable timestamp jump links** (`[04:12]`), offers **in-app video player seeking**, utilizes **Hybrid Retrieval (Dense FAISS + BM25)**, and maintains conversational memory.
 
 ---
 
 ## 🌟 Key Features
 
+- **🌐 Live Cloud Demo**: Accessible worldwide at [youtube-rag-chatbot123.streamlit.app](https://youtube-rag-chatbot123.streamlit.app/).
 - **Any YouTube Video**: Paste any standard (`watch?v=`), short (`/shorts/`), or embed URL.
-- **Clickable Timestamp Links**: Cites moments like `[04:25]`; clicking jumps the video player straight to that second.
-- **Hybrid Retrieval (Dense + BM25)**: Combines semantic vector similarity (`all-MiniLM-L6-v2`) with keyword search (`BM25`) via `EnsembleRetriever` for superior precision on technical jargon, proper nouns, and acronyms.
-- **Multi-Tier Transcript Fallback**:
-  1. Direct transcript fetch via YouTube Transcript API.
-  2. Multi-language and auto-generated captions auto-translated to English.
-  3. Audio download (`yt-dlp`) + Gemini audio transcription fallback when captions are disabled.
-- **FAISS Disk Caching**: Transcripts and vector indexes are cached in `.faiss_cache/` so returning to a video loads instantly.
-- **Conversational Memory**: Multi-turn dialogue awareness for asking follow-ups.
+- **Clickable Timestamp Links & In-App Seek**: Cites moments like `[04:25]`; click external links or use the `▶️ Seek Player to [MM:SS]` button to jump the embedded video player straight to that moment.
+- **Rich Video Info Card**: Automatically retrieves video title, creator name, and indexed segment counts via YouTube's public oEmbed API.
+- **Hybrid Retrieval (Dense + BM25)**: Combines semantic vector similarity (`all-MiniLM-L6-v2`) with keyword search (`BM25`) via `EnsembleRetriever` for superior precision on technical terms and proper nouns.
+- **Multi-Tier Resilient Caption Fallback**:
+  1. *Pre-bundled sample cache* for instant, zero-latency demo video loading.
+  2. *Direct YouTube Transcript API* fetch.
+  3. *Multi-language and auto-generated captions* auto-translated to English.
+  4. *Direct `yt-dlp` subtitle stream extraction* using `visionos`/`android` player clients to bypass YouTube's datacenter bot blocks (HTTP 403 Forbidden).
+  5. *Gemini multimodal audio fallback* if closed captions are unavailable.
+  6. *Custom / Pasted Transcript mode* to ingest lecture notes or manual transcripts directly.
+- **FAISS Disk Caching**: Transcripts and vector indexes are cached so returning to a video loads in milliseconds.
+- **Conversational Memory**: Multi-turn dialogue awareness for asking contextual follow-up questions.
 - **Real-Time Streaming**: Token-by-token streaming output directly inside Streamlit chat bubbles.
-- **Side-by-Side Video Player**: Watch the video and jump to timestamps while conversing with the assistant.
+- **Export Notes**: One-click **Download Chat (Markdown)** button to save all Q&A notes and timestamp citations.
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-YouTube URL / ID
+YouTube URL / Custom Transcript
        │
        ▼
-[1. Transcript Extraction & Chunking with Timestamps] (youtube-transcript-api / Gemini Audio Fallback)
+[1. Resilient Caption Ingestion & Timestamp Chunking] 
+(Local Cache ➔ YouTube Transcript API ➔ yt-dlp Subtitles ➔ Gemini Audio Fallback)
        │
        ▼
-[2. Embeddings & Vector Index Cache] (sentence-transformers/all-MiniLM-L6-v2 + FAISS)
+[2. Embeddings & Vector Index Cache] 
+(sentence-transformers/all-MiniLM-L6-v2 + FAISS Local Storage)
        │
        ▼
-[3. Hybrid Retrieval] (FAISS Dense Vector Search 60% + BM25 Sparse Search 40%)
+[3. Hybrid Retrieval] 
+(FAISS Dense Vector Search 60% + BM25 Sparse Keyword Search 40%)
        │
        ▼
-[4. Augmented Generation Chain] (Gemini 3.5/3.8 Flash + Chat History + Timestamp Anchors)
+[4. Augmented Generation Chain] 
+(Gemini 3.5/3.8 Flash + Multi-Turn Chat History + Strict Timestamp Citations)
        │
        ▼
-[5. Interactive Streamlit UI] (Interactive Video Player + Clickable Jump Links)
+[5. Interactive Streamlit Interface] 
+(Live Embedded Video Player + Direct Seeking + Clickable YouTube Jump Links)
 ```
 
 ---
@@ -52,7 +71,7 @@ YouTube URL / ID
 ### 2. Installation
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/youtube-rag-chatbot.git
+git clone https://github.com/arn-kmr/youtube-rag-chatbot.git
 cd youtube-rag-chatbot
 
 # Create virtual environment (optional)
@@ -76,28 +95,15 @@ streamlit run app.py
 
 ---
 
-## 🌐 Free Cloud Deployment (Streamlit Community Cloud)
+## 🌐 Cloud Deployment (Streamlit Community Cloud)
 
-You can deploy this application for free on **Streamlit Community Cloud**:
+This application is deployed and hosted on **Streamlit Community Cloud**:
 
-1. **Initialize Git & Push to GitHub**:
-   ```bash
-   git init
-   git add .
-   git commit -m "feat: complete YouTube RAG chatbot with hybrid search and clickable timestamps"
-   git branch -M main
-   git remote add origin https://github.com/YOUR_USERNAME/youtube-rag-chatbot.git
-   git push -u origin main
-   ```
-2. **Deploy on Streamlit**:
-   - Go to [share.streamlit.io](https://share.streamlit.io/) and log in with your GitHub account.
-   - Click **"New app"**.
-   - Select your repository (`youtube-rag-chatbot`), branch (`main`), and set the main file path to `app.py`.
-3. **Configure Secrets**:
-   - In the Streamlit deployment settings, click **"Advanced settings"** -> **"Secrets"**.
-   - Add your Gemini API key:
-     ```toml
-     GOOGLE_API_KEY = "your_actual_gemini_api_key"
-     ```
-   - Click **"Deploy!"**
-4. Your application will be live at `https://<your-app-name>.streamlit.app`!
+- **Repository**: [https://github.com/arn-kmr/youtube-rag-chatbot](https://github.com/arn-kmr/youtube-rag-chatbot)
+- **Live URL**: [https://youtube-rag-chatbot123.streamlit.app/](https://youtube-rag-chatbot123.streamlit.app/)
+
+### Secrets Configuration:
+In the Streamlit Cloud dashboard under **Settings** $\to$ **Secrets**:
+```toml
+GOOGLE_API_KEY = "your_actual_gemini_api_key"
+```
